@@ -16,7 +16,7 @@ message DetectionModel {
     // experimental meta architecture, populate a key in the
     // model_builder.EXPERIMENTAL_META_ARCH_BUILDER_MAP dict and set its
     // value to a function that builds your model.
-    ExperimentalModel experimental_model = 3;
+    CenterNet center_net_trt = 3;
 
     CenterNet center_net = 4;
   }
