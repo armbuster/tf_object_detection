@@ -569,3 +569,9 @@ class DetectionModel(six.with_metaclass(abc.ABCMeta, _BaseClass)):
     preprocessed_images, shapes = self.preprocess(images)
     prediction_dict = self.predict(preprocessed_images, shapes)
     return self.postprocess(prediction_dict, shapes)
+
+
+class DetectionModelPrediction(DetectionModel):
+    
+    def call(self, preprocessed_images, shapes):
+      return self.predict(preprocessed_images, shapes)

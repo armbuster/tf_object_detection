@@ -3019,7 +3019,8 @@ def get_num_instances_from_weights(groundtruth_weights_list):
     return num_instances
 
 
-class CenterNetMetaArchTrt(model.DetectionModel):
+
+class CenterNetMetaArchTrt(model.DetectionModelPrediction):
     """The CenterNet meta architecture [1].
 
     [1]: https://arxiv.org/abs/1904.07850
