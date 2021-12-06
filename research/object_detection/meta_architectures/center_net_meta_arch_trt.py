@@ -317,23 +317,25 @@ def top_k_feature_map_locations(
         feature map locations. If per_channel is False, N = k. Otherwise,
         N = k * channels.
     """
-    if not max_pool_kernel_size or max_pool_kernel_size == 1:
+    if not max_pool_kernel_size or max_pool_kernel_size == 1:  # not taken
         feature_map_peaks = feature_map
-    else:
+    else:  # taken
         feature_map_max_pool = tf.nn.max_pool(
             feature_map, ksize=max_pool_kernel_size, strides=1, padding="SAME"
         )
 
         feature_map_peak_mask = (
             tf.math.abs(feature_map - feature_map_max_pool) < PEAK_EPSILON
-        )
+        )  # peaks are 0 here, values next to peaks are larger numbers
 
         # Zero out everything that is not a peak.
         feature_map_peaks = feature_map * _to_float32(feature_map_peak_mask)
 
     batch_size, _, width, num_channels = _get_shape(feature_map, 4)
+    # (Pdb) feature_map_peaks.shape
+    # TensorShape([1, 128, 128, 10])
 
-    if per_channel:
+    if per_channel:  # not taken
         if k == 1:
             feature_map_flattened = tf.reshape(
                 feature_map_peaks, [batch_size, -1, num_channels]
@@ -380,7 +382,9 @@ def top_k_feature_map_locations(
     else:
         if k == 1:
             feature_map_peaks_flat = tf.reshape(feature_map_peaks, [batch_size, -1])
-            scores = tf.math.reduce_max(feature_map_peaks_flat, axis=1, keepdims=True)
+            scores = tf.math.reduce_max(
+                feature_map_peaks_flat, axis=1, keepdims=True
+            )  # get k largest peaks
             peak_flat_indices = tf.expand_dims(
                 tf.math.argmax(
                     feature_map_peaks_flat, axis=1, output_type=tf.dtypes.int32
@@ -393,6 +397,8 @@ def top_k_feature_map_locations(
             safe_k = k
             # assert k < tf.shape(feature_map_peaks_flat)[1]
             scores, peak_flat_indices = tf.math.top_k(feature_map_peaks_flat, k=safe_k)
+            # (Pdb) feature_map_peaks_flat.shape
+            # TensorShape([1, 163840])
 
     # Get x, y and channel indices corresponding to the top indices in the flat
     # array.
@@ -441,8 +447,19 @@ def prediction_tensors_to_boxes(
         ],
         axis=1,
     )
+
+    # (Pdb) height_width_predictions.shape
+    # TensorShape([1, 128, 128, 2])
+    # (Pdb) combined_indices.shape
+    # TensorShape([100, 3])
+
     new_height_width = tf.gather_nd(height_width_predictions, combined_indices)
     new_height_width = tf.reshape(new_height_width, [batch_size, num_boxes, 2])
+
+    # (Pdb) offset_predictions.shape
+    # TensorShape([1, 128, 128, 2])
+    # (Pdb) combined_indices.shape
+    # TensorShape([100, 3])
 
     new_offsets = tf.gather_nd(offset_predictions, combined_indices)
     offsets = tf.reshape(new_offsets, [batch_size, num_boxes, 2])
@@ -450,11 +467,11 @@ def prediction_tensors_to_boxes(
     y_indices = _to_float32(y_indices)
     x_indices = _to_float32(x_indices)
 
-    height_width = tf.maximum(new_height_width, 0)
+    height_width = tf.maximum(new_height_width, 0)  # why take max over batch dimension
     heights, widths = tf.unstack(height_width, axis=2)
     y_offsets, x_offsets = tf.unstack(offsets, axis=2)
 
-    ymin = y_indices + y_offsets - heights / 2.0
+    ymin = y_indices + y_offsets - heights / 2.0  # y_indices are in feature map
     xmin = x_indices + x_offsets - widths / 2.0
     ymax = y_indices + y_offsets + heights / 2.0
     xmax = x_indices + x_offsets + widths / 2.0
@@ -1924,6 +1941,7 @@ def convert_strided_predictions_to_normalized_boxes(boxes, stride, true_image_sh
     boxes = boxes * stride
     true_image_shapes = tf.tile(true_image_shapes[:, tf.newaxis, :2], [1, 1, 2])
     boxes = boxes / tf.cast(true_image_shapes, tf.float32)
+    # normalize bbox coordinates to fraction of true image size
     boxes = tf.clip_by_value(boxes, 0.0, 1.0)
     return boxes
 
@@ -4629,8 +4647,14 @@ class CenterNetMetaArchTrt(model.DetectionModel):
         """
         print("CUSTOM POSTPROCESSING STARTING")
         object_center_prob = tf.nn.sigmoid(prediction_dict[OBJECT_CENTER][-1])
+        # (Pdb) prediction_dict[OBJECT_CENTER][0]
+        # <tf.Tensor 'center_0/conv2d_160/BiasAdd:0' shape=(1, 128, 128, 10) dtype=float32>
+        # (Pdb) prediction_dict[OBJECT_CENTER][1]
+        # <tf.Tensor 'center_1/conv2d_162/BiasAdd:0' shape=(1, 128, 128, 10) dtype=float32>
 
-        if true_image_shapes is None:
+        import pdb
+
+        if true_image_shapes is None:  # not Taken
             # If true_image_shapes is not provided, we assume the whole image is valid
             # and infer the true_image_shapes from the object_center_prob shape.
             batch_size, strided_height, strided_width, _ = _get_shape(
@@ -4644,8 +4668,15 @@ class CenterNetMetaArchTrt(model.DetectionModel):
                 ]
             )  # pylint: disable=protected-access
             true_image_shapes = tf.stack([true_image_shapes] * batch_size, axis=0)
-        else:
+        else:  # Taken
             # Mask object centers by true_image_shape. [batch, h, w, 1]
+
+            # in case object_center_prob is bigger than the true_image_shape
+            # (not including padding), zero out object_center_mask where ever
+            # it is larger than the true image
+            # in this case it is all 1s because object center prob is smaller
+            # in both h and w dimensions than true image shapes
+
             object_center_mask = mask_from_true_image_shape(
                 _get_shape(object_center_prob, 4), true_image_shapes
             )
@@ -4663,9 +4694,20 @@ class CenterNetMetaArchTrt(model.DetectionModel):
             max_pool_kernel_size=self._center_params.peak_max_pool_kernel_size,
             k=self._center_params.max_box_predictions,
         )
+        # pdb.set_trace()
         multiclass_scores = tf.gather_nd(
             object_center_prob, tf.stack([y_indices, x_indices], -1), batch_dims=1
-        )
+        )  # get feature map values at peaks, seperately along batch dim
+
+        # (Pdb) tf.stack([y_indices, x_indices], -1).shape
+        # TensorShape([1, 100, 2])
+
+        # (Pdb) object_center_prob.shape
+        # TensorShape([1, 128, 128, 10])
+
+        # (Pdb) multiclass_scores.shape
+        # TensorShape([1, 100, 10])
+
         num_detections = tf.reduce_sum(tf.cast(detection_scores > 0, tf.int32), axis=1)
         postprocess_dict = {
             fields.DetectionResultFields.detection_scores: detection_scores,
@@ -4682,6 +4724,9 @@ class CenterNetMetaArchTrt(model.DetectionModel):
                 prediction_dict[BOX_SCALE][-1],
                 prediction_dict[BOX_OFFSET][-1],
             )
+
+            # [ymin, xmin, ymax, xmax] boxes strided are indices into feature map
+            # size (128, 128)
 
             boxes = convert_strided_predictions_to_normalized_boxes(
                 boxes_strided, self._stride, true_image_shapes
